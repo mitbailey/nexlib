@@ -46,8 +46,9 @@ impl AdvancedVX {
         }
 
         AdvancedVX {
+            // "Software drivers should be prepared to wait up to 3.5s (worst case scenario) for a hand control response."
             port: serialport::new(port_name.unwrap(), 9600)
-                .timeout(Duration::from_millis(10))
+                .timeout(Duration::from_millis(3500))
                 .stop_bits(stop_bits::Stop1)
                 .parity(parity::None)
                 .open()
@@ -64,7 +65,137 @@ impl AdvancedVX {
 
     }
 
-    fn 
+    // Goto commands: 
+    // - AzmAlt will be relative to where it was powered on if not aligned.
+    // - Ra/Dec will not work at all if not aligned.
+    fn goto_ra_dec() {
+
+    }
+    
+    fn goto_azm_alt() {
+
+    }
+
+    // Need further investigation.
+    fn sync() {
+
+    }
+
+    fn get_tracking_mode() {
+
+    }
+
+    fn set_tracking_mode() {
+
+    }
+
+    // This will cover pos and neg, and will be Azm or RA depending on the mount.
+    fn slew_fixed_horizontal() {
+        
+    }
+
+    // This will cover pos and neg, and will be Azm or RA depending on the mount.
+    fn slew_variable_horizontal() {
+        
+    }
+    
+    // This will cover pos and neg, and will be Alt or Dec depending on the mount.
+    fn slew_fixed_vertical() {
+
+    }
+
+    // This will cover pos and neg, and will be Alt or Dec depending on the mount.
+    fn slew_variable_vertical() {
+
+    }
+
+    fn get_location() {
+
+    }
+
+    fn set_location() {
+
+    }
+
+    fn get_time() {
+
+    }
+
+    fn set_time() {
+
+    }
+
+    fn gps_is_linked() {
+
+    }
+
+    fn gps_get_lat() {
+
+    }
+
+    fn gps_get_lon() {
+
+    }
+
+    fn gps_get_date() {
+
+    }
+
+    fn gps_get_year() {
+
+    }
+
+    fn gps_get_time() {
+
+    }
+
+    fn rtc_get_date() {
+
+    }
+
+    fn rtc_get_year() {
+
+    }
+
+    fn rtc_get_time() {
+
+    }
+
+    fn rtc_set_date() {
+
+    }
+
+    fn rtc_set_year() {
+
+    }
+
+    fn rtc_set_time() {
+
+    }
+
+    fn get_version() {
+
+    }
+
+    fn get_model() {
+
+    }
+
+    fn echo() {
+
+    }
+
+    fn is_aligned() {
+
+    }
+
+    fn goto_in_progress() {
+
+    }
+
+    fn cancel_goto() {
+
+    }
 
 }
 
