@@ -3,9 +3,34 @@ use std::str;
 use std::time::Duration;
 
 mod coordinates;
-pub use coordinates::{Azm_Alt, RA_Dec};
+pub use coordinates::{AzmAlt, RADec};
 
 const REV: i64 = 0x100000000;
+
+// Input slew rate in arcseconds/second
+fn slew_rate(rate: u16) -> (u8, u8) {
+    (
+        ((rate * 4) / 256).try_into().unwrap(),
+        ((rate * 4) % 256).try_into().unwrap(),
+    )
+}
+
+pub enum TrackingMode {
+    Off = 0,
+    AltAz = 1,
+    EQNorth = 2,
+    EQSouth = 3,
+}
+
+pub enum SlewAxis {
+    RAAzm = 0,
+    DecAlt = 1,
+}
+
+pub enum SlewDir {
+    Positive = 0,
+    Negative = 1,
+}
 
 pub struct AdvancedVX {
     port: Box<dyn SerialPort>,
@@ -68,22 +93,8 @@ impl AdvancedVX {
         }
     }
 
-    // fn bytes_to_int(&mut self, bytes: &[u8]) -> i64 {
-    //     let as_str = str::from_utf8(bytes).unwrap();
-    //     println!("String: {:?}", as_str);
-    //     i64::from_str_radix(as_str, 16).unwrap()
-    // }
-
-    // fn pos_int_to_deg(&mut self, pos: i64) -> f64 {
-    //     (pos as f64 / REV as f64) * 360.0
-    // }
-
-    // fn deg_to_pos_int(&mut self, deg: f64) -> i64 {
-    //     ((deg / 360.0) * REV as f64) as i64
-    // }
-
     // Always use the precise variants!
-    pub fn get_position_ra_dec(&mut self) -> Option<RA_Dec> {
+    pub fn get_position_ra_dec(&mut self) -> Option<RADec> {
         self.port.write_all(b"e").expect("Failed to write to port");
 
         let mut serial_buf: Vec<u8> = vec![0; 32];
@@ -100,27 +111,12 @@ impl AdvancedVX {
             _ => {
                 println!("Data found: {:?}", serial_buf);
 
-                // let coord = RA_Dec::<i64>::new_i64(
-                //     self.bytes_to_int(&serial_buf[0..8]),
-                //     self.bytes_to_int(&serial_buf[9..=16]),
-                // );
-
-                // Some(RA_Dec::<f64>::new_f64(
-                //     self.pos_int_to_deg(coord.ra),
-                //     self.pos_int_to_deg(coord.dec),
-                // ))
-
-                Some(RA_Dec::from_msg(&serial_buf))
-
-                // println!("RA: {:?} Dec: {:?}", ra_val, dec_val);
-                // println!("RA: {:?} Dec: {:?}", ra_deg, dec_deg);
-
-                // Some(RA_Dec::<f64>::new_f64(ra_deg, dec_deg)) // Returns tuple.
+                Some(RADec::from_msg(&serial_buf))
             }
         }
     }
 
-    fn get_position_azm_alt(&mut self) -> Option<Azm_Alt> {
+    fn get_position_azm_alt(&mut self) -> Option<AzmAlt> {
         self.port.write_all(b"z").expect("Failed to write to port");
 
         let mut serial_buf: Vec<u8> = vec![0; 32];
@@ -137,17 +133,7 @@ impl AdvancedVX {
             _ => {
                 println!("Data found: {:?}", serial_buf);
 
-                // let coord = Azm_Alt::<i64>::new_i64(
-                //     self.bytes_to_int(&serial_buf[0..8]),
-                //     self.bytes_to_int(&serial_buf[9..=16]),
-                // );
-
-                // Some(Azm_Alt::<f64>::new_f64(
-                //     self.pos_int_to_deg(coord.azm),
-                //     self.pos_int_to_deg(coord.alt),
-                // ))
-
-                Some(Azm_Alt::from_msg(&serial_buf))
+                Some(AzmAlt::from_msg(&serial_buf))
             }
         }
     }
@@ -156,62 +142,113 @@ impl AdvancedVX {
     // - AzmAlt will be relative to where it was powered on if not aligned.
     // - Ra/Dec will not work at all if not aligned.
     // degrees as f64 ==> position as i64 ==> Hex String
-    //
-    pub fn goto_ra_dec(&mut self, mut coord: RA_Dec) {
-        // println!("RA: {:?} Dec: {:?}", ra, dec);
-
-        // let c = RA_Dec::<i64>::new_i64(
-        //     self.deg_to_pos_int(coord.ra),
-        //     self.deg_to_pos_int(coord.dec),
-        // );
-
+    pub fn goto_ra_dec(&mut self, mut coord: RADec) {
         println!("GOTO: RA: {:?} Dec: {:?}", coord.ra, coord.dec);
-        println!("GOTO: RA: {:?} Dec: {:?}", coord.absolute_ra(), coord.absolute_dec());
-        println!("GOTO: RA: {:X} Dec: {:X}", coord.absolute_ra(), coord.absolute_dec());
+        println!(
+            "GOTO: RA: {:?} Dec: {:?}",
+            coord.absolute_ra(),
+            coord.absolute_dec()
+        );
+        println!(
+            "GOTO: RA: {:X} Dec: {:X}",
+            coord.absolute_ra(),
+            coord.absolute_dec()
+        );
 
         self.port
             .write_all(format!("r{:X},{:X}", coord.absolute_ra(), coord.absolute_dec()).as_bytes())
             .expect("Failed to write to port");
     }
 
-    fn goto_azm_alt(&mut self, mut coord: Azm_Alt) {
-        // let c = Azm_Alt::<i64>::new_i64(
-        //     self.deg_to_pos_int(coord.azm),
-        //     self.deg_to_pos_int(coord.alt),
-        // );
-
+    fn goto_azm_alt(&mut self, mut coord: AzmAlt) {
         self.port
             .write_all(format!("r{:X},{:X}", coord.absolute_azm(), coord.absolute_alt()).as_bytes())
             .expect("Failed to write to port");
     }
 
     // Need further investigation.
-    fn sync(&mut self, mut coord: RA_Dec) {
-        // let c = RA_Dec::<i64>::new_i64(
-        //     self.deg_to_pos_int(coord.ra),
-        //     self.deg_to_pos_int(coord.dec),
-        // );
-
+    pub fn sync(&mut self, mut coord: RADec) {
         self.port
             .write_all(format!("s{:X},{:X}", coord.absolute_ra(), coord.absolute_dec()).as_bytes())
             .expect("Failed to write to port");
     }
 
-    fn get_tracking_mode() {}
+    // 0 = Off
+    // 1 = Alt/Az
+    // 2 = EQ North
+    // 3 = EQ South
+    pub fn get_tracking_mode(&mut self) -> Option<TrackingMode> {
+        self.port.write_all(b"t").expect("Failed to write to port");
 
-    fn set_tracking_mode() {}
+        let mut serial_buf: Vec<u8> = vec![0; 32];
+        match self
+            .port
+            .read(serial_buf.as_mut_slice())
+            .expect("Found no data!")
+        {
+            0 => {
+                println!("No data found.");
 
-    // This will cover pos and neg, and will be Azm or RA depending on the mount.
-    fn slew_fixed_horizontal() {}
+                None // Returns None Option.
+            }
+            _ => {
+                println!("Data found: {:?}", serial_buf);
 
-    // This will cover pos and neg, and will be Azm or RA depending on the mount.
-    fn slew_variable_horizontal() {}
+                match serial_buf[0] {
+                    0 => Some(TrackingMode::Off),
+                    1 => Some(TrackingMode::AltAz),
+                    2 => Some(TrackingMode::EQNorth),
+                    3 => Some(TrackingMode::EQSouth),
+                    _ => None,
+                }
+            }
+        }
+    }
 
-    // This will cover pos and neg, and will be Alt or Dec depending on the mount.
-    fn slew_fixed_vertical() {}
+    pub fn set_tracking_mode(&mut self, mode: TrackingMode) {
+        self.port
+            .write_all(format!("T{}", mode as u8).as_bytes())
+            .expect("Failed to write to port");
+    }
 
-    // This will cover pos and neg, and will be Alt or Dec depending on the mount.
-    fn slew_variable_vertical() {}
+    fn slew_variable(&mut self, axis: SlewAxis, dir: SlewDir, rate: u16) {
+        let mut axis_byte = 0;
+        let mut dir_byte = 0;
+
+        match axis {
+            SlewAxis::RAAzm => {
+                axis_byte = 16;
+            }
+            SlewAxis::DecAlt => {
+                axis_byte = 17;
+            }
+        }
+
+        match dir {
+            SlewDir::Positive => {
+                dir_byte = 6;
+            }
+            SlewDir::Negative => {
+                dir_byte = 7;
+            }
+        }
+
+        let rate_bytes = slew_rate(rate);
+
+        self.port
+            .write_all(
+                format!(
+                    "P{}{}{}{}{}{}{}",
+                    0x3, axis_byte, dir_byte, rate_bytes.0, rate_bytes.1, 0x0, 0x0
+                )
+                .as_bytes(),
+            )
+            .expect("Failed to write to port");
+    }
+
+    fn slew_fixed(&mut self) {
+        
+    }
 
     fn get_location() {}
 

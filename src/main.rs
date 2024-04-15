@@ -1,5 +1,5 @@
 mod avx;
-pub use avx::{AdvancedVX, RA_Dec, Azm_Alt};
+pub use avx::{AdvancedVX, RADec, AzmAlt};
 
 fn main() {
     let mount = avx::AdvancedVX::new();
@@ -10,7 +10,7 @@ fn main() {
 mod tests {
     // mod avx;
     pub use crate::avx::AdvancedVX;
-    use crate::avx::RA_Dec;
+    use crate::avx::RADec;
 
     // #[test]
     // fn build() {
@@ -29,8 +29,16 @@ mod tests {
     #[test]
     fn goto_ra_dec() {
         let mut mount = AdvancedVX::new();
+        
+        mount.goto_ra_dec(RADec::new(138.7265968322754, 89.58314180374146));
+    }
+    
+    #[test]
+    fn get_tracking_mode() {
+        let mut mount = AdvancedVX::new();
+        let mode = mount.get_tracking_mode().unwrap();
 
-        mount.goto_ra_dec(RA_Dec::new(138.7265968322754, 89.58314180374146));
+        println!("{:?}", mode as u8);
     }
 
 }

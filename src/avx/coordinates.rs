@@ -16,18 +16,18 @@ fn deg_to_pos_int(deg: f64) -> i64 {
     ((deg / 360.0) * REV as f64) as i64
 }
 
-pub struct RA_Dec {
+pub struct RADec {
     pub ra: f64,
     pub dec: f64,
 }
 
-impl RA_Dec {
-    pub fn new(ra: f64, dec: f64) -> RA_Dec {
-        RA_Dec {ra, dec}
+impl RADec {
+    pub fn new(ra: f64, dec: f64) -> RADec {
+        RADec {ra, dec}
     }
 
-    pub fn from_msg(msg: &[u8]) -> RA_Dec {
-        RA_Dec::new(
+    pub fn from_msg(msg: &[u8]) -> RADec {
+        RADec::new(
             pos_int_to_deg(bytes_to_int(&msg[0..8])),
             pos_int_to_deg(bytes_to_int(&msg[9..=16])),
         )
@@ -42,18 +42,18 @@ impl RA_Dec {
     }
 }
 
-pub struct Azm_Alt {
+pub struct AzmAlt {
     pub azm: f64,
     pub alt: f64,
 }
 
-impl Azm_Alt {
-    pub fn new(azm: f64, alt: f64) -> Azm_Alt {
-        Azm_Alt {azm, alt}
+impl AzmAlt {
+    pub fn new(azm: f64, alt: f64) -> AzmAlt {
+        AzmAlt {azm, alt}
     }
 
-    pub fn from_msg(msg: &[u8]) -> Azm_Alt {
-        Azm_Alt::new(
+    pub fn from_msg(msg: &[u8]) -> AzmAlt {
+        AzmAlt::new(
             pos_int_to_deg(bytes_to_int(&msg[0..8])),
             pos_int_to_deg(bytes_to_int(&msg[9..=16])),
         )
