@@ -25,7 +25,7 @@ mod tests {
         
         mount.goto_ra_dec(RADec::new(138.7265968322754, 89.58314180374146)).expect("Failed to goto position.");
     }
-    
+
     #[test]
     fn get_tracking_mode() {
         let mut mount = AdvancedVX::new().expect("Failed to connect to mount.");

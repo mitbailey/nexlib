@@ -8,7 +8,7 @@
  * @copyright Copyright (c) 2024
  *
  */
-use serialport::{available_ports, SerialPort, SerialPortType};
+use serialport::{SerialPort, SerialPortType};
 use std::error::Error;
 use std::time::Duration;
 use std::{io, str};
@@ -16,7 +16,7 @@ use std::{io, str};
 mod coordinates;
 pub use coordinates::{AzmAlt, RADec};
 
-const REV: i64 = 0x100000000;
+// const REV: i64 = 0x100000000;
 
 // Input slew rate in arcseconds/second
 fn slew_rate(rate: u16) -> (u8, u8) {
@@ -54,6 +54,13 @@ pub enum SlewRate {
     Rate7 = 7,
     Rate8 = 8,
     Rate9 = 9,
+}
+
+pub enum Device {
+    AzmRaMotor = 16,
+    AltDecMotor = 17,
+    GpsUnit = 176,
+    RtcUnit = 178,
 }
 
 pub struct AdvancedVX {
@@ -316,49 +323,218 @@ impl AdvancedVX {
         Ok(())
     }
 
-    fn get_location() {}
+    pub fn get_location() {
+        todo!();
+    }
 
-    fn set_location() {}
+    pub fn set_location() {
+        todo!();
+    }
 
-    fn get_time() {}
+    pub fn get_time() {
+        todo!();
+    }
 
-    fn set_time() {}
+    pub fn set_time() {
+        todo!();
+    }
 
-    fn gps_is_linked() {}
+    pub fn gps_is_linked() {
+        todo!();
+    }
 
-    fn gps_get_lat() {}
+    pub fn gps_get_lat() {
+        todo!();
+    }
 
-    fn gps_get_lon() {}
+    pub fn gps_get_lon() {
+        todo!();
+    }
 
-    fn gps_get_date() {}
+    pub fn gps_get_date() {
+        todo!();
+    }
 
-    fn gps_get_year() {}
+    pub fn gps_get_year() {
+        todo!();
+    }
 
-    fn gps_get_time() {}
+    pub fn gps_get_time() {
+        todo!();
+    }
 
-    fn rtc_get_date() {}
+    pub fn rtc_get_date() {
+        todo!();
+    }
 
-    fn rtc_get_year() {}
+    pub fn rtc_get_year() {
+        todo!();
+    }
 
-    fn rtc_get_time() {}
+    pub fn rtc_get_time() {
+        todo!();
+    }
 
-    fn rtc_set_date() {}
+    pub fn rtc_set_date() {
+        todo!();
+    }
 
-    fn rtc_set_year() {}
+    pub fn rtc_set_year() {
+        todo!();
+    }
 
-    fn rtc_set_time() {}
+    pub fn rtc_set_time() {
+        todo!();
+    }
 
-    fn get_version() {}
+    pub fn get_version(&mut self) -> Result<String, Box<dyn std::error::Error>> {
+        self.port.write_all(b"V")?;
 
-    fn get_device_version() {}
+        let mut serial_buf: Vec<u8> = vec![0; 32];
+        match self.port.read(serial_buf.as_mut_slice()) {
+            Err(e) => {
+                eprintln!("Failed to read from port: {:?}", e);
+                Err(e.into())
+            }
+            Ok(0) => {
+                eprintln!("No data found.");
+                Err(Box::new(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "No data found.",
+                )))
+            }
+            Ok(_n) => {
+                println!("Data found: {:?}", serial_buf);
+                Ok(String::from_utf8(serial_buf)?)
+            }
+        }
+    }
 
-    fn get_model() {}
+    pub fn get_device_version(&mut self, device: Device) -> Result<String, Box<dyn Error>> {
+        self.port
+            .write_all(format!("P{}{}{}{}{}{}{}", 1, device as u8, 254, 0, 0, 0, 2).as_bytes())?;
 
-    fn echo() {}
+        let mut serial_buf: Vec<u8> = vec![0; 32];
+        match self.port.read(serial_buf.as_mut_slice()) {
+            Err(e) => {
+                eprintln!("Failed to read from port: {:?}", e);
+                Err(e.into())
+            }
+            Ok(0) => {
+                eprintln!("No data found.");
+                Err(Box::new(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "No data found.",
+                )))
+            }
+            Ok(_n) => {
+                println!("Data found: {:?}", serial_buf);
+                Ok(String::from_utf8(serial_buf)?)
+            }
+        }
+    }
 
-    fn is_aligned() {}
+    pub fn get_model(&mut self) -> Result<String, Box<dyn Error>> {
+        self.port.write_all(b"m")?;
 
-    fn goto_in_progress() {}
+        let mut serial_buf: Vec<u8> = vec![0; 32];
+        match self.port.read(serial_buf.as_mut_slice()) {
+            Err(e) => {
+                eprintln!("Failed to read from port: {:?}", e);
+                Err(e.into())
+            }
+            Ok(0) => {
+                eprintln!("No data found.");
+                Err(Box::new(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "No data found.",
+                )))
+            }
+            Ok(_n) => {
+                println!("Data found: {:?}", serial_buf);
+                // Ok(String::from_utf8(serial_buf)?)
+                let model = str::from_utf8(&serial_buf)?;
 
-    fn cancel_goto() {}
+                match model {
+                    "1#" => Ok("GPS Series".to_string()),
+                    "3#" => Ok("i-Series".to_string()),
+                    "4#" => Ok("i-Series SE".to_string()),
+                    "5#" => Ok("CGE".to_string()),
+                    "6#" => Ok("Advanced GT".to_string()),
+                    "7#" => Ok("SLT".to_string()),
+                    "8#" => Ok("CPC".to_string()),
+                    "9#" => Ok("GT".to_string()),
+                    "10#" => Ok("4/5 SE".to_string()),
+                    "11#" => Ok("6/8 SE".to_string()),
+                    _ => Err(Box::new(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "Invalid model identifier.",
+                    ))),
+                }
+            }
+        }
+    }
+
+    pub fn echo() {
+        unimplemented!();
+    }
+
+    pub fn is_aligned(&mut self) -> Result<bool, io::Error> {
+        self.port.write_all(b"J")?;
+
+        let mut serial_buf: Vec<u8> = vec![0; 32];
+        match self.port.read(serial_buf.as_mut_slice()) {
+            Err(e) => {
+                eprintln!("Failed to read from port: {:?}", e);
+                Err(e)
+            }
+            Ok(0) => {
+                eprintln!("No data found.");
+                Err(io::Error::new(io::ErrorKind::TimedOut, "No data found."))
+            }
+            Ok(_n) => {
+                println!("Data found: {:?}", serial_buf);
+                match serial_buf[0] {
+                    0 => Ok(false),
+                    1 => Ok(true),
+                    _ => Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "Invalid goto status.",
+                    )),
+                }
+            }
+        }
+    }
+
+    pub fn goto_in_progress(&mut self) -> Result<bool, io::Error> {
+        self.port.write_all(b"L")?;
+
+        let mut serial_buf: Vec<u8> = vec![0; 32];
+        match self.port.read(serial_buf.as_mut_slice()) {
+            Err(e) => {
+                eprintln!("Failed to read from port: {:?}", e);
+                Err(e)
+            }
+            Ok(0) => {
+                eprintln!("No data found.");
+                Err(io::Error::new(io::ErrorKind::TimedOut, "No data found."))
+            }
+            Ok(_n) => {
+                println!("Data found: {:?}", serial_buf);
+                match serial_buf[0] {
+                    0 => Ok(false),
+                    1 => Ok(true),
+                    _ => Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "Invalid goto status.",
+                    )),
+                }
+            }
+        }
+    }
+
+    pub fn cancel_goto(&mut self) -> Result<(), io::Error> {
+        self.port.write_all(b"M")?;
+        Ok(())
+    }
 }
