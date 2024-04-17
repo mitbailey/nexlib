@@ -8,8 +8,7 @@
  * @copyright Copyright (c) 2024
  *
  */
-
- use serialport::{available_ports, SerialPort, SerialPortType};
+use serialport::{available_ports, SerialPort, SerialPortType};
 use std::error::Error;
 use std::time::Duration;
 use std::{io, str};
@@ -71,13 +70,7 @@ impl AdvancedVX {
     pub fn new() -> Result<AdvancedVX, io::Error> {
         println!("Available ports:");
 
-        let ports_info = match serialport::available_ports() {
-            Ok(ports) => ports,
-            Err(e) => {
-                eprintln!("Error listing serial ports: {:?}", e);
-                return Err(io::Error::new(io::ErrorKind::Other, e.to_string()));
-            }
-        };
+        let ports_info = serialport::available_ports()?;
 
         println!("Found {} ports", ports_info.len());
 
@@ -131,13 +124,7 @@ impl AdvancedVX {
 
     // Always use the precise variants!
     pub fn get_position_ra_dec(&mut self) -> Result<RADec, io::Error> {
-        match self.port.write_all(b"e") {
-            Ok(_) => (),
-            Err(e) => {
-                eprintln!("Failed to write to port: {:?}", e);
-                return Err(e);
-            }
-        }
+        self.port.write_all(b"e")?;
 
         let mut serial_buf: Vec<u8> = vec![0; 32];
         match self.port.read(serial_buf.as_mut_slice()) {
@@ -157,13 +144,7 @@ impl AdvancedVX {
     }
 
     pub fn get_position_azm_alt(&mut self) -> Result<AzmAlt, io::Error> {
-        match self.port.write_all(b"z") {
-            Ok(_) => (),
-            Err(e) => {
-                eprintln!("Failed to write to port: {:?}", e);
-                return Err(e);
-            }
-        }
+        self.port.write_all(b"z")?;
 
         let mut serial_buf: Vec<u8> = vec![0; 32];
         match self.port.read(serial_buf.as_mut_slice()) {
@@ -243,13 +224,7 @@ impl AdvancedVX {
     // 2 = EQ North
     // 3 = EQ South
     pub fn get_tracking_mode(&mut self) -> Result<TrackingMode, io::Error> {
-        match self.port.write_all(b"t") {
-            Ok(_) => (),
-            Err(e) => {
-                eprintln!("Failed to write to port: {:?}", e);
-                return Err(e);
-            }
-        }
+        self.port.write_all(b"t")?;
 
         // This is how read is properly error handled.
         let mut serial_buf: Vec<u8> = vec![0; 32];
@@ -281,13 +256,8 @@ impl AdvancedVX {
     }
 
     pub fn set_tracking_mode(&mut self, mode: TrackingMode) -> Result<(), io::Error> {
-        match self.port.write_all(format!("T{}", mode as u8).as_bytes()) {
-            Ok(_) => Ok(()),
-            Err(e) => {
-                eprintln!("Failed to write to port: {:?}", e);
-                Err(e)
-            }
-        }
+        self.port.write_all(format!("T{}", mode as u8).as_bytes())?;
+        Ok(())
     }
 
     pub fn slew_variable(
@@ -308,19 +278,15 @@ impl AdvancedVX {
 
         let rate_bytes = slew_rate(rate);
 
-        match self.port.write_all(
+        self.port.write_all(
             format!(
                 "P{}{}{}{}{}{}{}",
                 3, axis_byte, dir_byte, rate_bytes.0, rate_bytes.1, 0, 0
             )
             .as_bytes(),
-        ) {
-            Ok(_) => Ok(()),
-            Err(e) => {
-                eprintln!("Failed to write to port: {:?}", e);
-                Err(e)
-            }
-        }
+        )?;
+
+        Ok(())
     }
 
     pub fn slew_fixed(
@@ -339,19 +305,15 @@ impl AdvancedVX {
             SlewDir::Negative => 37,
         };
 
-        match self.port.write_all(
+        self.port.write_all(
             format!(
                 "P{}{}{}{}{}{}{}",
                 2, axis_byte, dir_byte, rate as u8, 0, 0, 0
             )
             .as_bytes(),
-        ) {
-            Ok(_) => Ok(()),
-            Err(e) => {
-                eprintln!("Failed to write to port: {:?}", e);
-                Err(e)
-            }
-        }
+        )?;
+
+        Ok(())
     }
 
     fn get_location() {}
