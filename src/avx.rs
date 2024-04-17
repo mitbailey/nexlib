@@ -441,7 +441,7 @@ impl AdvancedVX {
         todo!();
     }
 
-    pub fn gps_is_linked(&mut self) -> Result<bool, io::Error> {
+    fn _gps_is_linked(&mut self) -> Result<bool, io::Error> {
         use Device::*;
         let res = self.read_device(GpsUnit, 55, 1)?;
         match res[0] {
@@ -450,9 +450,9 @@ impl AdvancedVX {
         }
     }
 
-    pub fn gps_get_location(&mut self) -> Result<(f32, f32), io::Error> {
+    fn _gps_get_location(&mut self) -> Result<(f32, f32), io::Error> {
         use Device::*;
-        if !self.gps_is_linked()? {
+        if !self._gps_is_linked()? {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 "GPS unit is not linked.",
@@ -463,26 +463,6 @@ impl AdvancedVX {
         let res = self.read_device(GpsUnit, 2, 3)?;
         let lon = (f32::from_be_bytes([0, res[0], res[1], res[2]]) / (0x1000000 as f32)) * 360.;
         Ok((lat, lon))
-    }
-
-    pub fn gps_get_lat() {
-        todo!();
-    }
-
-    pub fn gps_get_lon() {
-        todo!();
-    }
-
-    pub fn gps_get_date() {
-        todo!();
-    }
-
-    pub fn gps_get_year() {
-        todo!();
-    }
-
-    pub fn gps_get_time() {
-        todo!();
     }
 
     pub fn rtc_get_datetime(&mut self) -> Result<DateTime<chrono::Utc>, io::Error> {

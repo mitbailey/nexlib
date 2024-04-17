@@ -70,23 +70,6 @@ mod tests {
     }
 
     #[test]
-    fn get_gps_location() {
-        let mut mount = AdvancedVX::new().expect("Failed to connect to mount.");
-        
-        let location = mount.gps_get_location();
-
-        match location {
-            Ok(loc) => {
-                println!("Latitude: {}", loc.0);
-                println!("Longitude: {}", loc.1);
-            },
-            Err(e) => {
-                println!("Error: {:?}", e);
-            }
-        }
-    }
-
-    #[test]
     fn rtc_get_datetime() {
         let mut mount = AdvancedVX::new().expect("Failed to connect to mount.");
         
