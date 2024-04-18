@@ -1,0 +1,1 @@
+Tests prefixed with `nocon` require exclusive communication access to a mount and cannot be run concurrently. These tests should only be run using `cargo test nocon -- --test-threads=1`. If all tests are to be run, then `cargo test -- --test-threads=1` should be used since some will require exclusive access to the same hardware device.

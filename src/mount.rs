@@ -1,21 +1,11 @@
 use chrono::{DateTime, TimeZone, Utc};
 use chrono::{Datelike, Timelike};
-/**
- * @file avx.rs
- * @author Mit Bailey (mitbailey@outlook.com)
- * @brief
- * @version See Git tags for version information.
- * @date 2024.04.15
- *
- * @copyright Copyright (c) 2024
- *
- */
 use serialport::{SerialPort, SerialPortType};
 use std::error::Error;
 use std::fmt::Display;
 use std::io::Read;
 use std::time::Duration;
-use std::{fmt, io, str};
+use std::{fmt, io};
 
 mod coordinates;
 pub use coordinates::{AzmAlt, RADec};
@@ -80,12 +70,12 @@ impl Display for Device {
 }
 
 #[derive(Debug)]
-pub struct AdvancedVX {
+pub struct Mount {
     port: Box<dyn SerialPort>,
     recv: [u8; 32],
 }
 
-impl AdvancedVX {
+impl Mount {
     fn read_port(&mut self) -> Result<usize, io::Error> {
         match self.port.read(&mut self.recv) {
             Ok(n) => {
@@ -104,7 +94,13 @@ impl AdvancedVX {
         }
     }
 
-    fn read_device(&mut self, dev: Device, cmd: u8, resp_len: usize) -> Result<&[u8], io::Error> {
+    // Communicates through the hand controller to a device internal to the mount. Expects a response with data.
+    fn read_passthrough(
+        &mut self,
+        dev: Device,
+        cmd: u8,
+        resp_len: usize,
+    ) -> Result<&[u8], io::Error> {
         self.port
             .write_all(&[b'P', 1, dev as u8, cmd, 0, 0, 0, resp_len as u8])?;
         let len = self.read_port()?;
@@ -126,7 +122,8 @@ impl AdvancedVX {
         }
     }
 
-    fn write_device(&mut self, dev: Device, cmd: u8, args: &[u8]) -> Result<(), io::Error> {
+    // Communicates through the hand controller to a device internal to the mount. Expects a response with no data.
+    fn write_passthrough(&mut self, dev: Device, cmd: u8, args: &[u8]) -> Result<(), io::Error> {
         if args.len() > 3 {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
@@ -155,7 +152,8 @@ impl AdvancedVX {
         Ok(())
     }
 
-    fn read(&mut self, cmd: u8) -> Result<&[u8], io::Error> {
+    // Communicates directly with the hand controller. Expects a response with data.
+    fn read_handcontrol(&mut self, cmd: u8) -> Result<&[u8], io::Error> {
         self.port.write_all(&[cmd])?;
         let len = self.read_port()?;
         if self.recv[len - 1] != b'#' {
@@ -167,7 +165,8 @@ impl AdvancedVX {
         Ok(&self.recv[..len - 1])
     }
 
-    fn write(&mut self, cmd: u8, args: &[u8]) -> Result<Vec<u8>, io::Error> {
+    // Communicates directly with the hand controller. Expects a response with no data.
+    fn write_handcontrol(&mut self, cmd: u8, args: &[u8]) -> Result<Vec<u8>, io::Error> {
         let mut cmd = vec![cmd];
         cmd.extend_from_slice(args);
         self.port.write_all(&cmd)?;
@@ -190,14 +189,14 @@ impl AdvancedVX {
     }
 }
 
-impl Default for AdvancedVX {
+impl Default for Mount {
     fn default() -> Self {
         Self::new().expect("Failed to create AdvancedVX object.")
     }
 }
 
-impl AdvancedVX {
-    pub fn new() -> Result<AdvancedVX, io::Error> {
+impl Mount {
+    pub fn new() -> Result<Mount, io::Error> {
         println!("Available ports:");
 
         let ports_info = serialport::available_ports()?;
@@ -235,7 +234,7 @@ impl AdvancedVX {
             }
         }
 
-        Ok(AdvancedVX {
+        Ok(Mount {
             // "Software drivers should be prepared to wait up to 3.5s (worst case scenario) for a hand control response."
             port: serialport::new(port_name.unwrap(), 9600)
                 .timeout(Duration::from_millis(3500))
@@ -246,21 +245,14 @@ impl AdvancedVX {
         })
     }
 
-    // Always use the precise variants!
+    // We always use the precise variants.
     pub fn get_position_ra_dec(&mut self) -> Result<RADec, io::Error> {
-        self.port.write_all(b"e")?;
-
-        let mut serial_buf = [0; 32];
-        self.read_port()?;
-
-        Ok(RADec::from_msg(&serial_buf))
+        self.read_handcontrol(b'e')?;
+        Ok(RADec::from_msg(&self.recv))
     }
 
     pub fn get_position_azm_alt(&mut self) -> Result<AzmAlt, io::Error> {
-        self.port.write_all(b"z")?;
-
-        self.read_port()?;
-
+        self.read_handcontrol(b'z')?;
         Ok(AzmAlt::from_msg(&self.recv))
     }
 
@@ -269,55 +261,27 @@ impl AdvancedVX {
     // - Ra/Dec will not work at all if not aligned.
     // degrees as f64 ==> position as i64 ==> Hex String
     pub fn goto_ra_dec(&mut self, mut coord: RADec) -> Result<(), io::Error> {
-        println!("GOTO: RA: {:?} Dec: {:?}", coord.ra, coord.dec);
-        println!(
-            "GOTO: RA: {:?} Dec: {:?}",
-            coord.absolute_ra(),
-            coord.absolute_dec()
-        );
-        println!(
-            "GOTO: RA: {:X} Dec: {:X}",
-            coord.absolute_ra(),
-            coord.absolute_dec()
-        );
-
-        match self
-            .port
-            .write_all(format!("r{:X},{:X}", coord.absolute_ra(), coord.absolute_dec()).as_bytes())
-        {
-            Ok(_) => Ok(()),
-            Err(e) => {
-                eprintln!("Failed to write to port: {:?}", e);
-                Err(e)
-            }
-        }
+        self.write_handcontrol(
+            b'r',
+            format!("{:X},{:X}", coord.ra_as_i64(), coord.dec_as_i64()).as_bytes(),
+        )?;
+        Ok(())
     }
 
     pub fn goto_azm_alt(&mut self, mut coord: AzmAlt) -> Result<(), io::Error> {
-        match self
-            .port
-            .write_all(format!("r{:X},{:X}", coord.absolute_azm(), coord.absolute_alt()).as_bytes())
-        {
-            Ok(_) => Ok(()),
-            Err(e) => {
-                eprintln!("Failed to write to port: {:?}", e);
-                Err(e)
-            }
-        }
+        self.write_handcontrol(
+            b'r',
+            format!("{:X},{:X}", coord.azm_as_i64(), coord.alt_as_i64()).as_bytes(),
+        )?;
+        Ok(())
     }
 
-    // Need further investigation.
     pub fn sync(&mut self, mut coord: RADec) -> Result<(), io::Error> {
-        match self
-            .port
-            .write_all(format!("s{:X},{:X}", coord.absolute_ra(), coord.absolute_dec()).as_bytes())
-        {
-            Ok(_) => Ok(()),
-            Err(e) => {
-                eprintln!("Failed to write to port: {:?}", e);
-                Err(e)
-            }
-        }
+        self.write_handcontrol(
+            b's',
+            format!("{:X},{:X}", coord.ra_as_i64(), coord.dec_as_i64()).as_bytes(),
+        )?;
+        Ok(())
     }
 
     // 0 = Off
@@ -325,9 +289,7 @@ impl AdvancedVX {
     // 2 = EQ North
     // 3 = EQ South
     pub fn get_tracking_mode(&mut self) -> Result<TrackingMode, io::Error> {
-        self.port.write_all(b"t")?;
-
-        self.read_port()?;
+        self.read_handcontrol(b't')?;
 
         println!("Data found: {:?}", self.recv);
         match self.recv[0] {
@@ -343,7 +305,7 @@ impl AdvancedVX {
     }
 
     pub fn set_tracking_mode(&mut self, mode: TrackingMode) -> Result<(), io::Error> {
-        self.port.write_all(format!("T{}", mode as u8).as_bytes())?;
+        self.write_handcontrol(b'T', &[mode as u8])?;
         Ok(())
     }
 
@@ -353,9 +315,9 @@ impl AdvancedVX {
         dir: SlewDir,
         rate: u16,
     ) -> Result<(), io::Error> {
-        let axis_byte = match axis {
-            SlewAxis::RAAzm => 16,
-            SlewAxis::DecAlt => 17,
+        let device = match axis {
+            SlewAxis::RAAzm => Device::AzmRaMotor,
+            SlewAxis::DecAlt => Device::AltDecMotor,
         };
 
         let dir_byte = match dir {
@@ -365,13 +327,7 @@ impl AdvancedVX {
 
         let rate_bytes = slew_rate(rate);
 
-        self.port.write_all(
-            format!(
-                "P{}{}{}{}{}{}{}",
-                3, axis_byte, dir_byte, rate_bytes.0, rate_bytes.1, 0, 0
-            )
-            .as_bytes(),
-        )?;
+        self.write_passthrough(device, dir_byte, &[rate_bytes.0, rate_bytes.1])?;
 
         Ok(())
     }
@@ -382,9 +338,9 @@ impl AdvancedVX {
         dir: SlewDir,
         rate: SlewRate,
     ) -> Result<(), io::Error> {
-        let axis_byte = match axis {
-            SlewAxis::RAAzm => 16,
-            SlewAxis::DecAlt => 17,
+        let device = match axis {
+            SlewAxis::RAAzm => Device::AzmRaMotor,
+            SlewAxis::DecAlt => Device::AltDecMotor,
         };
 
         let dir_byte = match dir {
@@ -392,14 +348,7 @@ impl AdvancedVX {
             SlewDir::Negative => 37,
         };
 
-        self.port.write_all(
-            format!(
-                "P{}{}{}{}{}{}{}",
-                2, axis_byte, dir_byte, rate as u8, 0, 0, 0
-            )
-            .as_bytes(),
-        )?;
-
+        self.write_passthrough(device, dir_byte, &[rate as u8])?;
         Ok(())
     }
 
@@ -412,13 +361,15 @@ impl AdvancedVX {
     }
 
     pub fn get_time(&mut self) -> Result<DateTime<Utc>, io::Error> {
-        let res = self.read(b'h')?;
+        let res = self.read_handcontrol(b'h')?;
+
         if res.len() != 8 {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 format!("Invalid time data received: {:?}", res),
             ));
         }
+
         let hour = res[0];
         let min = res[1];
         let sec = res[2];
@@ -434,6 +385,7 @@ impl AdvancedVX {
                 format!("Failed to parse time {time}: {e:?}"),
             )
         })?;
+
         Ok(date.with_timezone(&chrono::Utc))
     }
 
@@ -441,38 +393,46 @@ impl AdvancedVX {
         todo!();
     }
 
+    // Not available on AVX.
     fn _gps_is_linked(&mut self) -> Result<bool, io::Error> {
         use Device::*;
-        let res = self.read_device(GpsUnit, 55, 1)?;
+
+        let res = self.read_passthrough(GpsUnit, 55, 1)?;
+
         match res[0] {
             0 => Ok(false),
             _ => Ok(true),
         }
     }
 
+    // Not available on AVX.
     fn _gps_get_location(&mut self) -> Result<(f32, f32), io::Error> {
         use Device::*;
+
         if !self._gps_is_linked()? {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 "GPS unit is not linked.",
             ));
         }
-        let res = self.read_device(GpsUnit, 1, 3)?;
+
+        let res = self.read_passthrough(GpsUnit, 1, 3)?;
         let lat = (f32::from_be_bytes([0, res[0], res[1], res[2]]) / (0x1000000 as f32)) * 360.;
-        let res = self.read_device(GpsUnit, 2, 3)?;
+        let res = self.read_passthrough(GpsUnit, 2, 3)?;
         let lon = (f32::from_be_bytes([0, res[0], res[1], res[2]]) / (0x1000000 as f32)) * 360.;
+
         Ok((lat, lon))
     }
 
     pub fn rtc_get_datetime(&mut self) -> Result<DateTime<chrono::Utc>, io::Error> {
         use Device::*;
-        let res = self.read_device(RtcUnit, 3, 2)?;
+
+        let res = self.read_passthrough(RtcUnit, 3, 2)?;
         let mon = res[0];
         let day = res[1];
-        let res = self.read_device(RtcUnit, 4, 2)?;
+        let res = self.read_passthrough(RtcUnit, 4, 2)?;
         let year = u16::from_be_bytes([res[0], res[1]]);
-        let res = self.read_device(RtcUnit, 51, 3)?;
+        let res = self.read_passthrough(RtcUnit, 51, 3)?;
         let hour = res[0];
         let min = res[1];
         let sec = res[2];
@@ -486,51 +446,29 @@ impl AdvancedVX {
                 sec.into(),
             )
             .unwrap();
+
         Ok(res)
     }
 
     pub fn rtc_set_datetime_now(&mut self) -> Result<(), io::Error> {
         let now = chrono::Utc::now();
-        use Device::*;
-        self.write_device(
-            RtcUnit,
-            131,
-            &[now.month() as u8, now.day() as u8],
-        )?;
-        self.write_device(RtcUnit, 132, &(now.year() as u16).to_be_bytes())?;
-        let now = chrono::Utc::now();
-        self.write_device(
-            RtcUnit,
-            179,
-            &[
-                now.hour() as u8,
-                now.minute() as u8,
-                now.second() as u8,
-            ],
-        )
-    }
 
-    pub fn rtc_set_datetime(&mut self, datetime: DateTime<chrono::Utc>) -> Result<(), io::Error> {
         use Device::*;
-        self.write_device(
-            RtcUnit,
-            131,
-            &[datetime.month() as u8, datetime.day() as u8],
-        )?;
-        self.write_device(RtcUnit, 132, &(datetime.year() as u16).to_be_bytes())?;
-        self.write_device(
+
+        self.write_passthrough(RtcUnit, 131, &[now.month() as u8, now.day() as u8])?;
+        self.write_passthrough(RtcUnit, 132, &(now.year() as u16).to_be_bytes())?;
+
+        let now = chrono::Utc::now();
+
+        self.write_passthrough(
             RtcUnit,
             179,
-            &[
-                datetime.hour() as u8,
-                datetime.minute() as u8,
-                datetime.second() as u8,
-            ],
+            &[now.hour() as u8, now.minute() as u8, now.second() as u8],
         )
     }
 
     pub fn get_version(&mut self) -> Result<String, Box<dyn std::error::Error>> {
-        let res = self.read(b'V')?;
+        let res = self.read_handcontrol(b'V')?;
 
         if res.len() != 2 {
             return Err(Box::new(io::Error::new(
@@ -538,17 +476,17 @@ impl AdvancedVX {
                 format!("Invalid data received: {:?}", res),
             )));
         }
+
         Ok(format!("{}.{}", res[0], res[1]))
     }
 
     pub fn get_device_version(&mut self, device: Device) -> Result<String, Box<dyn Error>> {
-        let res = self.read_device(device, 254, 2)?;
-
+        let res = self.read_passthrough(device, 254, 2)?;
         Ok(format!("{}.{}", res[0], res[1]))
     }
 
     pub fn get_model(&mut self) -> Result<String, Box<dyn Error>> {
-        let res = self.read(b'm')?;
+        let res = self.read_handcontrol(b'm')?;
         if res.len() != 1 {
             return Err(Box::new(io::Error::new(
                 io::ErrorKind::InvalidData,
@@ -582,13 +520,14 @@ impl AdvancedVX {
     }
 
     pub fn is_aligned(&mut self) -> Result<bool, io::Error> {
-        let res = self.read(b'J')?;
+        let res = self.read_handcontrol(b'J')?;
         if res.len() != 1 {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 "Invalid data received.",
             ));
         }
+
         match res[0] {
             0 => Ok(false),
             1 => Ok(true),
@@ -600,7 +539,7 @@ impl AdvancedVX {
     }
 
     pub fn goto_in_progress(&mut self) -> Result<bool, io::Error> {
-        let res = self.read(b'L')?;
+        let res = self.read_handcontrol(b'L')?;
         if res.len() != 1 {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
@@ -619,7 +558,7 @@ impl AdvancedVX {
     }
 
     pub fn cancel_goto(&mut self) -> Result<(), io::Error> {
-        let res = self.read(b'Q')?;
+        let res = self.read_handcontrol(b'Q')?;
 
         if res.len() != 1 {
             return Err(io::Error::new(
@@ -636,4 +575,9 @@ impl AdvancedVX {
             )),
         }
     }
+}
+
+#[cfg(test)]
+mod tests {
+    // use super::*; // Allows testing of private functions.
 }
