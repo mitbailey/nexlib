@@ -4,15 +4,17 @@ use serialport::{SerialPort, SerialPortType};
 use std::error::Error;
 use std::fmt::Display;
 use std::io::Read;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use std::{fmt, io};
 
 mod coordinates;
-pub use coordinates::{AzmAlt, RADec};
+pub use coordinates::{AzEl, RADec};
 
 // const REV: i64 = 0x100000000;
 
-// Input slew rate in arcseconds/second
+/// Converts a slew rate in arcseconds/second to a mount-readable format.
+/// The rate is multiplied by four and separated into a high and low byte.
 fn slew_rate(rate: u16) -> (u8, u8) {
     (
         ((rate * 4) / 256).try_into().unwrap(),
@@ -22,14 +24,14 @@ fn slew_rate(rate: u16) -> (u8, u8) {
 
 pub enum TrackingMode {
     Off = 0,
-    AltAz = 1,
+    AzEl = 1,
     EQNorth = 2,
     EQSouth = 3,
 }
 
 pub enum SlewAxis {
-    RAAzm = 0,
-    DecAlt = 1,
+    RAAz = 0,
+    DecEl = 1,
 }
 
 pub enum SlewDir {
@@ -50,64 +52,239 @@ pub enum SlewRate {
     Rate9 = 9,
 }
 
+pub enum Model {
+    GPSSeries = 1,
+    ISeries = 3,
+    ISeriesSe = 4,
+    Cge = 5,
+    AdvancedGT = 6,
+    Slt = 7,
+    Cpc = 9,
+    Gt = 10,
+    FourFiveSE = 11,
+    SixEightSE = 12,
+    Cgem = 14,
+    AdvancedVX = 20,
+    Evolution = 22,
+}
+
+impl fmt::Display for Model {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Model::GPSSeries => write!(f, "GPS Series"),
+            Model::ISeries => write!(f, "i-Series"),
+            Model::ISeriesSe => write!(f, "i-Series SE"),
+            Model::Cge => write!(f, "CGE"),
+            Model::AdvancedGT => write!(f, "Advanced GT"),
+            Model::Slt => write!(f, "SLT"),
+            Model::Cpc => write!(f, "CPC"),
+            Model::Gt => write!(f, "GT"),
+            Model::FourFiveSE => write!(f, "4/5 SE"),
+            Model::SixEightSE => write!(f, "6/8 SE"),
+            Model::Cgem => write!(f, "CGEM"),
+            Model::AdvancedVX => write!(f, "Advanced VX"),
+            Model::Evolution => write!(f, "Evolution"),
+        }
+    }
+}
+
 #[derive(Debug, Copy, Clone)]
-pub enum Device {
-    AzmRaMotor = 16,
-    AltDecMotor = 17,
+enum Device {
+    AzRaMotor = 16,
+    ElDecMotor = 17,
     GpsUnit = 176,
     RtcUnit = 178,
+}
+
+#[derive(Debug, Copy, Clone)]
+pub enum NonGpsDevice {
+    AzRaMotor = 16,
+    ElDecMotor = 17,
+    RtcUnit = 178,
+}
+
+impl NonGpsDevice {
+    fn as_device(&self) -> Device {
+        match self {
+            NonGpsDevice::AzRaMotor => Device::AzRaMotor,
+            NonGpsDevice::ElDecMotor => Device::ElDecMotor,
+            NonGpsDevice::RtcUnit => Device::RtcUnit,
+        }
+    }
 }
 
 impl Display for Device {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Device::AzmRaMotor => write!(f, "Azimuth/RA Motor"),
-            Device::AltDecMotor => write!(f, "Altitude/Dec Motor"),
+            Device::AzRaMotor => write!(f, "Azimuth/RA Motor"),
+            Device::ElDecMotor => write!(f, "Elevation/Dec Motor"),
             Device::GpsUnit => write!(f, "GPS Unit"),
             Device::RtcUnit => write!(f, "RTC Unit"),
         }
     }
 }
 
+pub trait Mount {
+    fn get_position_ra_dec(&mut self) -> Result<RADec, io::Error>;
+    fn get_position_az_el(&mut self) -> Result<AzEl, io::Error>;
+    fn goto_ra_dec(&mut self, coord: RADec) -> Result<(), io::Error>;
+    fn goto_az_el(&mut self, coord: AzEl) -> Result<(), io::Error>;
+    fn sync(&mut self, coord: RADec) -> Result<(), io::Error>;
+    fn get_tracking_mode(&mut self) -> Result<TrackingMode, io::Error>;
+    fn set_tracking_mode(&mut self, mode: TrackingMode) -> Result<(), io::Error>;
+    fn slew_variable(&mut self, axis: SlewAxis, dir: SlewDir, rate: u16) -> Result<(), io::Error>;
+    fn slew_fixed(&mut self, axis: SlewAxis, dir: SlewDir, rate: SlewRate)
+        -> Result<(), io::Error>;
+    fn get_location();
+    fn set_location();
+    fn get_time(&mut self) -> Result<DateTime<Utc>, io::Error>;
+    fn set_time();
+    fn get_version(&mut self) -> Result<String, Box<dyn std::error::Error>>;
+    fn get_device_version(&mut self, device: NonGpsDevice) -> Result<String, Box<dyn Error>>;
+    fn get_model(&mut self) -> Result<Model, io::Error>;
+    fn echo();
+    fn is_aligned(&mut self) -> Result<bool, io::Error>;
+    fn goto_in_progress(&mut self) -> Result<bool, io::Error>;
+    fn cancel_goto(&mut self) -> Result<(), io::Error>;
+    fn stop_slew(&mut self, slew: SlewAxis) -> Result<(), io::Error>;
+
+    /// Get GPS device
+    fn get_gps(&mut self) -> Result<CelestronGps, io::Error>;
+}
+
+pub trait Gps {
+    fn is_linked(&mut self) -> Result<bool, io::Error>;
+    fn get_location(&mut self) -> Result<(f32, f32), io::Error>;
+    fn get_datetime(&mut self) -> Result<DateTime<chrono::Utc>, io::Error>;
+    fn get_device_version(&mut self) -> Result<String, Box<dyn Error>>;
+}
+
+pub trait Rtc {
+    fn get_datetime(&mut self) -> Result<DateTime<chrono::Utc>, io::Error>;
+    fn set_datetime_now(&mut self) -> Result<(), io::Error>;
+}
+
+/// The device which we control.
+///
+/// Orientates a telescope tube.
 #[derive(Debug)]
-pub struct Mount {
-    port: Box<dyn SerialPort>,
+pub struct CelestronMount {
+    /// `port` should ONLY be accessed in `read_port` and `write_port`.
+    port: Arc<Mutex<Box<dyn SerialPort>>>,
     recv: [u8; 32],
 }
 
-impl Mount {
+pub struct CelestronGps<'a> {
+    mount: &'a mut CelestronMount,
+}
+
+impl<'a> Gps for CelestronGps<'a> {
+    // Not available on AVX.
+    fn is_linked(&mut self) -> Result<bool, io::Error> {
+        use Device::*;
+
+        let res = self.mount.read_passthrough(GpsUnit, 55, 1)?;
+
+        match res[0] {
+            0 => Ok(false),
+            _ => Ok(true),
+        }
+    }
+
+    // Not available on AVX.
+    fn get_location(&mut self) -> Result<(f32, f32), io::Error> {
+        use Device::*;
+
+        if !self.is_linked()? {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "GPS unit is not linked.",
+            ));
+        }
+
+        let res = self.mount.read_passthrough(GpsUnit, 1, 3)?;
+        let lat = (f32::from_be_bytes([0, res[0], res[1], res[2]]) / (0x1000000 as f32)) * 360.;
+        let res = self.mount.read_passthrough(GpsUnit, 2, 3)?;
+        let lon = (f32::from_be_bytes([0, res[0], res[1], res[2]]) / (0x1000000 as f32)) * 360.;
+
+        Ok((lat, lon))
+    }
+
+    fn get_datetime(&mut self) -> Result<DateTime<chrono::Utc>, io::Error> {
+        todo!();
+    }
+    
+    /// Gets the version of the mount's firmware.
+    fn get_device_version(&mut self) -> Result<String, Box<dyn Error>> {
+        let res = self.mount.read_passthrough(Device::GpsUnit, 254, 2)?;
+        Ok(format!("{}.{}", res[0], res[1]))
+    }
+}
+
+/// Private functions for CelestronMount.
+impl CelestronMount {
+    /// Reads from a USB port and checks for the '#' character at the end of the message.
+    ///
+    /// The NexStar Communication Protocol requires a '#' at the end of each message sent by the mount.
     fn read_port(&mut self) -> Result<usize, io::Error> {
-        match self.port.read(&mut self.recv) {
+        let mut port = self.port.lock().unwrap();
+        
+        match port.read(&mut self.recv) {
             Ok(n) => {
+                println!("RECEIVED (Ok): {:?}", &self.recv[..n]);
                 if self.recv[n - 1] != b'#' {
                     return Err(io::Error::new(
                         io::ErrorKind::InvalidData,
-                        "Invalid data received.",
+                        format!("[{}:{}] Invalid data received: {:?}", file!(), line!(), self.recv),
                     ));
                 }
+                
                 Ok(n)
             }
             Err(e) => {
-                eprintln!("Failed to read from port: {:?}", e);
+                println!("RECEIVED (Err): {:?}", &self.recv);
+                eprintln!(
+                    "[{}:{}] Failed to read from port: {:?}",
+                    file!(),
+                    line!(),
+                    e
+                );
                 Err(e)
             }
         }
     }
 
-    // Communicates through the hand controller to a device internal to the mount. Expects a response with data.
+    fn write_port(&mut self, buf: &[u8]) -> Result<(), io::Error> {
+        println!("TRANSMITTED: {:?}", buf);
+
+        self.port.lock().unwrap().write_all(buf)?;
+        
+        // Ok, so.
+        // This loop is necessary because when we send a command where we do not expect any data back, we do expect to receive a '#' back. Unfortunately, it doesn't seem to be sent immediately. So, we must wait here until we get some sort of response (and we should always get some response) before we can continue. Then, the calling function should always call self.read_port() to clear the buffer whether or not it actually wants to read the data. Typically, its 10 - 100 ms.
+        while self.port.lock().unwrap().bytes_to_read()? == 0 {
+            println!("Waiting for there to be bytes to read...");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+
+        Ok(())
+    }
+
+    /// Communicates through the hand controller to a device internal to the mount.
+    ///
+    /// Expects a response with data.
     fn read_passthrough(
         &mut self,
         dev: Device,
         cmd: u8,
         resp_len: usize,
     ) -> Result<&[u8], io::Error> {
-        self.port
-            .write_all(&[b'P', 1, dev as u8, cmd, 0, 0, 0, resp_len as u8])?;
+        self.write_port(&[b'P', 1, dev as u8, cmd, 0, 0, 0, resp_len as u8])?;
+
         let len = self.read_port()?;
         if self.recv[len - 1] != b'#' {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
-                "Invalid data received.",
+                format!("[{}:{}] Invalid data received: {:?}", file!(), line!(), self.recv),
             ));
         }
         if len == resp_len + 1 {
@@ -122,81 +299,76 @@ impl Mount {
         }
     }
 
-    // Communicates through the hand controller to a device internal to the mount. Expects a response with no data.
+    /// Communicates through the hand controller to a device internal to the mount.
+    ///
+    /// Expects a response with no data.
     fn write_passthrough(&mut self, dev: Device, cmd: u8, args: &[u8]) -> Result<(), io::Error> {
+        // let mut port = self.port.lock().unwrap();
+
         if args.len() > 3 {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 format!("Command arguments must be 3 bytes or less. {:?}", args),
             ));
         }
+        
         let mut cmd = [b'P', args.len() as u8 + 1, dev as u8, cmd, 0, 0, 0, 0];
+        
         for (idx, arg) in args.iter().enumerate() {
             cmd[4 + idx] = *arg;
         }
-        self.port.write_all(&cmd)?;
-        match self.port.read(&mut cmd) {
-            Ok(len) => {
-                if cmd[len - 1] != b'#' {
-                    return Err(io::Error::new(
-                        io::ErrorKind::InvalidData,
-                        format!("Command {cmd:?} failed with error code {}", cmd[len - 1]),
-                    ));
-                }
-            }
-            Err(e) => {
-                eprintln!("Failed to read from port: {:?}", e);
-                return Err(e);
-            }
-        }
+        
+        // port.write_all(&cmd)?;
+        self.write_port(&cmd)?;
+        self.read_port()?; // Necessary to clear the buffer - we expect to get back a #.
+        
         Ok(())
     }
 
-    // Communicates directly with the hand controller. Expects a response with data.
+    /// Communicates directly with the hand controller.
+    ///
+    /// Expects a response with data.
     fn read_handcontrol(&mut self, cmd: u8) -> Result<&[u8], io::Error> {
-        self.port.write_all(&[cmd])?;
+        self.write_port(&[cmd])?;
+
         let len = self.read_port()?;
+
         if self.recv[len - 1] != b'#' {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
-                "Invalid data received.",
+                format!("[{}:{}] Invalid data received: {:?}", file!(), line!(), self.recv),
             ));
         }
+
         Ok(&self.recv[..len - 1])
     }
 
-    // Communicates directly with the hand controller. Expects a response with no data.
+    /// Communicates directly with the hand controller.
+    ///
+    /// Expects a response with no data.
     fn write_handcontrol(&mut self, cmd: u8, args: &[u8]) -> Result<Vec<u8>, io::Error> {
         let mut cmd = vec![cmd];
+
         cmd.extend_from_slice(args);
-        self.port.write_all(&cmd)?;
+
+        self.write_port(&cmd)?;
+        self.read_port()?; // Necessary to clear the buffer - we expect to get back a #.
+
         cmd.clear();
-        match self.port.read(&mut cmd) {
-            Ok(len) => {
-                if cmd[len - 1] != b'#' {
-                    return Err(io::Error::new(
-                        io::ErrorKind::InvalidData,
-                        format!("Command {cmd:?} failed with error code {}", cmd[len - 1]),
-                    ));
-                }
-            }
-            Err(e) => {
-                eprintln!("Failed to read from port: {:?}", e);
-                return Err(e);
-            }
-        }
+
         Ok(cmd)
     }
 }
 
-impl Default for Mount {
+impl Default for CelestronMount {
     fn default() -> Self {
         Self::new().expect("Failed to create AdvancedVX object.")
     }
 }
 
-impl Mount {
-    pub fn new() -> Result<Mount, io::Error> {
+/// Public functions for Mount.
+impl CelestronMount {
+    pub fn new() -> Result<CelestronMount, io::Error> {
         println!("Available ports:");
 
         let ports_info = serialport::available_ports()?;
@@ -234,33 +406,43 @@ impl Mount {
             }
         }
 
-        Ok(Mount {
+        Ok(CelestronMount {
             // "Software drivers should be prepared to wait up to 3.5s (worst case scenario) for a hand control response."
-            port: serialport::new(port_name.unwrap(), 9600)
-                .timeout(Duration::from_millis(3500))
-                .stop_bits(serialport::StopBits::One)
-                .parity(serialport::Parity::None)
-                .open()?,
+            port: Arc::new(Mutex::new(
+                serialport::new(port_name.unwrap(), 9600)
+                    .timeout(Duration::from_millis(3500)) // should be 3500 ms
+                    .stop_bits(serialport::StopBits::One)
+                    .parity(serialport::Parity::None)
+                    .open()?,
+            )),
             recv: [0; 32],
         })
     }
+}
 
-    // We always use the precise variants.
-    pub fn get_position_ra_dec(&mut self) -> Result<RADec, io::Error> {
+impl Mount for CelestronMount {
+    /// Gets the current pointing position of the mount in right ascension and declination.
+    ///
+    /// Uses the high precision 24-bit NexStar coordinates.
+    fn get_position_ra_dec(&mut self) -> Result<RADec, io::Error> {
         self.read_handcontrol(b'e')?;
         Ok(RADec::from_msg(&self.recv))
     }
 
-    pub fn get_position_azm_alt(&mut self) -> Result<AzmAlt, io::Error> {
+    /// Gets the current pointing position of the mount in azimuth and elevation.
+    ///
+    /// Uses the precise 24-bit NexStar Get Position command.
+    fn get_position_az_el(&mut self) -> Result<AzEl, io::Error> {
         self.read_handcontrol(b'z')?;
-        Ok(AzmAlt::from_msg(&self.recv))
+        Ok(AzEl::from_msg(&self.recv))
     }
 
-    // Goto commands:
-    // - AzmAlt will be relative to where it was powered on if not aligned.
-    // - Ra/Dec will not work at all if not aligned.
-    // degrees as f64 ==> position as i64 ==> Hex String
-    pub fn goto_ra_dec(&mut self, mut coord: RADec) -> Result<(), io::Error> {
+    /// Moves the mount to a specified right ascension and declination.
+    ///
+    /// Uses the high precision 24-bit NexStar coordinates.
+    ///
+    /// Will not work if the mount is not aligned.
+    fn goto_ra_dec(&mut self, mut coord: RADec) -> Result<(), io::Error> {
         self.write_handcontrol(
             b'r',
             format!("{:X},{:X}", coord.ra_as_i64(), coord.dec_as_i64()).as_bytes(),
@@ -268,15 +450,30 @@ impl Mount {
         Ok(())
     }
 
-    pub fn goto_azm_alt(&mut self, mut coord: AzmAlt) -> Result<(), io::Error> {
+    /// Moves the mount to a specified azimuth and elevation.
+    ///
+    /// Uses the high precision 24-bit NexStar coordinates.
+    ///
+    /// Will be relative to where it was powered on if not aligned.
+    fn goto_az_el(&mut self, mut coord: AzEl) -> Result<(), io::Error> {
         self.write_handcontrol(
             b'r',
-            format!("{:X},{:X}", coord.azm_as_i64(), coord.alt_as_i64()).as_bytes(),
+            format!("{:X},{:X}", coord.az_as_i64(), coord.el_as_i64()).as_bytes(),
         )?;
         Ok(())
     }
 
-    pub fn sync(&mut self, mut coord: RADec) -> Result<(), io::Error> {
+    /// Sets the mount's current pointing to the passed coordinates.
+    ///
+    /// Uses the high precision 24-bit NexStar coordinates.
+    ///
+    /// Improves the pointing accuracy of future movements by assuming that this position is accurate.
+    ///
+    /// # Arguments
+    ///
+    /// * `coord` - The `RADec` coordinates to sync to; should be the expected coordinates of the object currently
+    /// pointed at.
+    fn sync(&mut self, mut coord: RADec) -> Result<(), io::Error> {
         self.write_handcontrol(
             b's',
             format!("{:X},{:X}", coord.ra_as_i64(), coord.dec_as_i64()).as_bytes(),
@@ -284,17 +481,14 @@ impl Mount {
         Ok(())
     }
 
-    // 0 = Off
-    // 1 = Alt/Az
-    // 2 = EQ North
-    // 3 = EQ South
-    pub fn get_tracking_mode(&mut self) -> Result<TrackingMode, io::Error> {
+    /// Gets the current tracking mode of the mount.
+    fn get_tracking_mode(&mut self) -> Result<TrackingMode, io::Error> {
         self.read_handcontrol(b't')?;
 
         println!("Data found: {:?}", self.recv);
         match self.recv[0] {
             0 => Ok(TrackingMode::Off),
-            1 => Ok(TrackingMode::AltAz),
+            1 => Ok(TrackingMode::AzEl),
             2 => Ok(TrackingMode::EQNorth),
             3 => Ok(TrackingMode::EQSouth),
             _ => Err(io::Error::new(
@@ -304,20 +498,23 @@ impl Mount {
         }
     }
 
-    pub fn set_tracking_mode(&mut self, mode: TrackingMode) -> Result<(), io::Error> {
+    /// Sets the tracking mode of the mount.
+    fn set_tracking_mode(&mut self, mode: TrackingMode) -> Result<(), io::Error> {
         self.write_handcontrol(b'T', &[mode as u8])?;
         Ok(())
     }
 
-    pub fn slew_variable(
-        &mut self,
-        axis: SlewAxis,
-        dir: SlewDir,
-        rate: u16,
-    ) -> Result<(), io::Error> {
+    /// Begins a variable (user specified speed) slew movement.
+    ///
+    ///  # Arguments
+    ///
+    /// * `axis` - The axis to slew.
+    /// * `dir` - The direction to slew.
+    /// * `rate` - The rate of movement in arcseconds/second.
+    fn slew_variable(&mut self, axis: SlewAxis, dir: SlewDir, rate: u16) -> Result<(), io::Error> {
         let device = match axis {
-            SlewAxis::RAAzm => Device::AzmRaMotor,
-            SlewAxis::DecAlt => Device::AltDecMotor,
+            SlewAxis::RAAz => Device::AzRaMotor,
+            SlewAxis::DecEl => Device::ElDecMotor,
         };
 
         let dir_byte = match dir {
@@ -332,15 +529,22 @@ impl Mount {
         Ok(())
     }
 
-    pub fn slew_fixed(
+    /// Begins a fixed (predefined speed) slew movement.
+    ///
+    /// # Arguments
+    ///
+    /// * `axis` - The axis to slew.
+    /// * `dir` - The direction to slew.
+    /// * `rate` - The rate of movement selected from the NexStar protocol's predefined speeds.
+    fn slew_fixed(
         &mut self,
         axis: SlewAxis,
         dir: SlewDir,
         rate: SlewRate,
     ) -> Result<(), io::Error> {
         let device = match axis {
-            SlewAxis::RAAzm => Device::AzmRaMotor,
-            SlewAxis::DecAlt => Device::AltDecMotor,
+            SlewAxis::RAAz => Device::AzRaMotor,
+            SlewAxis::DecEl => Device::ElDecMotor,
         };
 
         let dir_byte = match dir {
@@ -352,15 +556,16 @@ impl Mount {
         Ok(())
     }
 
-    pub fn get_location() {
+    fn get_location() {
         todo!();
     }
 
-    pub fn set_location() {
+    fn set_location() {
         todo!();
     }
 
-    pub fn get_time(&mut self) -> Result<DateTime<Utc>, io::Error> {
+    /// Gets the current time from the mount.
+    fn get_time(&mut self) -> Result<DateTime<Utc>, io::Error> {
         let res = self.read_handcontrol(b'h')?;
 
         if res.len() != 8 {
@@ -389,42 +594,154 @@ impl Mount {
         Ok(date.with_timezone(&chrono::Utc))
     }
 
-    pub fn set_time() {
+    /// Sets the current time on the mount.
+    fn set_time() {
         todo!();
     }
 
-    // Not available on AVX.
-    fn _gps_is_linked(&mut self) -> Result<bool, io::Error> {
-        use Device::*;
+    /// Gets the version of the hand controller's firmware.
+    fn get_version(&mut self) -> Result<String, Box<dyn std::error::Error>> {
+        let res = self.read_handcontrol(b'V')?;
 
-        let res = self.read_passthrough(GpsUnit, 55, 1)?;
-
-        match res[0] {
-            0 => Ok(false),
-            _ => Ok(true),
+        if res.len() != 2 {
+            return Err(Box::new(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("[{}:{}] Invalid data received: {:?}", file!(), line!(), res),
+            )));
         }
+
+        Ok(format!("{}.{}", res[0], res[1]))
     }
 
-    // Not available on AVX.
-    fn _gps_get_location(&mut self) -> Result<(f32, f32), io::Error> {
-        use Device::*;
+    /// Gets the version of the mount's firmware.
+    fn get_device_version(&mut self, device: NonGpsDevice) -> Result<String, Box<dyn Error>> {
+        let res = self.read_passthrough(device.as_device(), 254, 2)?;
+        Ok(format!("{}.{}", res[0], res[1]))
+    }
 
-        if !self._gps_is_linked()? {
+    /// Gets the model of the mount.
+    fn get_model(&mut self) -> Result<Model, io::Error> {
+        let res = self.read_handcontrol(b'm')?;
+        if res.len() != 1 {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
-                "GPS unit is not linked.",
+                format!("[{}:{}] Invalid data received: {:?}", file!(), line!(), res),
             ));
         }
 
-        let res = self.read_passthrough(GpsUnit, 1, 3)?;
-        let lat = (f32::from_be_bytes([0, res[0], res[1], res[2]]) / (0x1000000 as f32)) * 360.;
-        let res = self.read_passthrough(GpsUnit, 2, 3)?;
-        let lon = (f32::from_be_bytes([0, res[0], res[1], res[2]]) / (0x1000000 as f32)) * 360.;
-
-        Ok((lat, lon))
+        match res[0] {
+            1 => Ok(Model::GPSSeries),
+            3 => Ok(Model::ISeries),
+            4 => Ok(Model::ISeriesSe),
+            5 => Ok(Model::Cge),
+            6 => Ok(Model::AdvancedGT),
+            7 => Ok(Model::Slt),
+            9 => Ok(Model::Cpc),
+            10 => Ok(Model::Gt),
+            11 => Ok(Model::FourFiveSE),
+            12 => Ok(Model::SixEightSE),
+            14 => Ok(Model::Cgem),
+            20 => Ok(Model::AdvancedVX),
+            22 => Ok(Model::Evolution),
+            _ => Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "Invalid model identifier.",
+            )),
+        }
     }
 
-    pub fn rtc_get_datetime(&mut self) -> Result<DateTime<chrono::Utc>, io::Error> {
+    /// Repeats back the message that was sent to it.
+    fn echo() {
+        unimplemented!();
+    }
+
+    /// Gets the mount's current alignment status.
+    fn is_aligned(&mut self) -> Result<bool, io::Error> {
+        let res = self.read_handcontrol(b'J')?;
+        if res.len() != 1 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("[{}:{}] Invalid data received: {:?}", file!(), line!(), res),
+            ));
+        }
+
+        match res[0] {
+            0 => Ok(false),
+            1 => Ok(true),
+            _ => Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "Invalid goto status.",
+            )),
+        }
+    }
+
+    /// Determines if the mount is currently executing a goto command.
+    fn goto_in_progress(&mut self) -> Result<bool, io::Error> {
+        let res = self.read_handcontrol(b'L')?;
+        if res.len() != 1 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("[{}:{}] Invalid data received: {:?}", file!(), line!(), res),
+            ));
+        }
+
+        match res[0] {
+            48 => Ok(false),
+            49 => Ok(true),
+            _ => Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("Invalid goto status: {} from {:?}.", res[0], res),
+            )),
+        }
+    }
+
+    /// Cancels the current goto in progress.
+    fn cancel_goto(&mut self) -> Result<(), io::Error> {
+        let res = self.read_handcontrol(b'Q')?;
+
+        if res.len() != 1 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("[{}:{}] Invalid data received: {:?}", file!(), line!(), res),
+            ));
+        }
+
+        match res[0] {
+            0 => Ok(()),
+            _ => Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "Invalid goto status.",
+            )),
+        }
+    }
+
+    /// Get GPS device
+    fn get_gps(&mut self) -> Result<CelestronGps, io::Error> {
+        let model = self.get_model()?;
+
+        match model {
+            Model::GPSSeries => (),
+            _ => {
+                return Err(io::Error::new(
+                    io::ErrorKind::NotFound,
+                    format!("No GPS device on model {}.", model),
+                ))
+            }
+        }
+
+        Ok(CelestronGps {
+            mount: self,
+        })
+    }
+    
+    fn stop_slew(&mut self, axis: SlewAxis) -> Result<(), io::Error> {
+        self.slew_variable(axis, SlewDir::Positive, 0)
+    }
+}
+
+impl Rtc for CelestronMount {
+    /// Gets the current date and time from the mount's real-time clock.
+    fn get_datetime(&mut self) -> Result<DateTime<chrono::Utc>, io::Error> {
         use Device::*;
 
         let res = self.read_passthrough(RtcUnit, 3, 2)?;
@@ -450,7 +767,8 @@ impl Mount {
         Ok(res)
     }
 
-    pub fn rtc_set_datetime_now(&mut self) -> Result<(), io::Error> {
+    /// Sets the current date and time on the mount's real-time clock.
+    fn set_datetime_now(&mut self) -> Result<(), io::Error> {
         let now = chrono::Utc::now();
 
         use Device::*;
@@ -465,115 +783,6 @@ impl Mount {
             179,
             &[now.hour() as u8, now.minute() as u8, now.second() as u8],
         )
-    }
-
-    pub fn get_version(&mut self) -> Result<String, Box<dyn std::error::Error>> {
-        let res = self.read_handcontrol(b'V')?;
-
-        if res.len() != 2 {
-            return Err(Box::new(io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!("Invalid data received: {:?}", res),
-            )));
-        }
-
-        Ok(format!("{}.{}", res[0], res[1]))
-    }
-
-    pub fn get_device_version(&mut self, device: Device) -> Result<String, Box<dyn Error>> {
-        let res = self.read_passthrough(device, 254, 2)?;
-        Ok(format!("{}.{}", res[0], res[1]))
-    }
-
-    pub fn get_model(&mut self) -> Result<String, Box<dyn Error>> {
-        let res = self.read_handcontrol(b'm')?;
-        if res.len() != 1 {
-            return Err(Box::new(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "Invalid data received.",
-            )));
-        }
-
-        match res[0] {
-            1 => Ok("GPS Series".to_string()),
-            3 => Ok("i-Series".to_string()),
-            4 => Ok("i-Series SE".to_string()),
-            5 => Ok("CGE".to_string()),
-            6 => Ok("Advanced GT".to_string()),
-            7 => Ok("SLT".to_string()),
-            9 => Ok("CPC".to_string()),
-            10 => Ok("GT".to_string()),
-            11 => Ok("4/5 SE".to_string()),
-            12 => Ok("6/8 SE".to_string()),
-            14 => Ok("CGEM".to_string()),
-            20 => Ok("Advanced VX".to_string()),
-            22 => Ok("Evolution".to_string()),
-            _ => Err(Box::new(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "Invalid model identifier.",
-            ))),
-        }
-    }
-
-    pub fn echo() {
-        unimplemented!();
-    }
-
-    pub fn is_aligned(&mut self) -> Result<bool, io::Error> {
-        let res = self.read_handcontrol(b'J')?;
-        if res.len() != 1 {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "Invalid data received.",
-            ));
-        }
-
-        match res[0] {
-            0 => Ok(false),
-            1 => Ok(true),
-            _ => Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "Invalid goto status.",
-            )),
-        }
-    }
-
-    pub fn goto_in_progress(&mut self) -> Result<bool, io::Error> {
-        let res = self.read_handcontrol(b'L')?;
-        if res.len() != 1 {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "Invalid data received.",
-            ));
-        }
-
-        match res[0] {
-            0 => Ok(false),
-            1 => Ok(true),
-            _ => Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "Invalid goto status.",
-            )),
-        }
-    }
-
-    pub fn cancel_goto(&mut self) -> Result<(), io::Error> {
-        let res = self.read_handcontrol(b'Q')?;
-
-        if res.len() != 1 {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "Invalid data received.",
-            ));
-        }
-
-        match res[0] {
-            0 => Ok(()),
-            _ => Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "Invalid goto status.",
-            )),
-        }
     }
 }
 
