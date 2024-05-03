@@ -1,4 +1,4 @@
-mod mount;
+pub mod mount;
 pub use mount::{AzEl, CelestronMount, NonGpsDevice, RADec};
 
 // TODO: Fix issue where the serial port always waits the 3.5 second timeout before returning the buffer, even when something has been read. Perhaps this has to do with the fact that the buffer hasn't been filled to capacity?
