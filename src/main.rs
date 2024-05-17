@@ -1,10 +1,10 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")] // hide console window on Windows in release
 
-use std::vec;
 use eframe::egui;
 use eframe::egui::Visuals;
 use egui_dock::{DockArea, DockState, NodeIndex};
 use mount::Mount;
+use std::vec;
 
 pub mod mount;
 pub use mount::{AzEl, CelestronMount, NonGpsDevice, RADec};
@@ -99,35 +99,36 @@ impl GuiTabs {
 
         egui::Grid::new("grid").show(ui, |ui| {
             ui.set_enabled(self.connected);
-    
-            ui.label("Current RA/Dec:");
-            ui.horizontal(|ui| {
-                ui.add(egui::Label::new(format!("{}", self.curr_ra_dec.ra)));
-                ui.add(egui::Label::new(format!("{}", self.curr_ra_dec.dec)));
-                if ui.button("Refresh").clicked() {
-                    self.curr_ra_dec = self
-                        .mount
-                        .as_mut()
-                        .unwrap()
-                        .get_position_ra_dec()
-                        .expect("Failed to get position.");
-                }
-            });
-    
-            ui.label("Go to RA/Dec:");
-            ui.horizontal(|ui| {
-                ui.add(egui::DragValue::new(&mut self.goto_ra_dec.ra).speed(0.1));
-                ui.add(egui::DragValue::new(&mut self.goto_ra_dec.dec).speed(0.1));
-                if ui.button("Go").clicked() {
-                    self.mount
-                        .as_mut()
-                        .unwrap()
-                        .goto_ra_dec(self.goto_ra_dec) // Pass the cloned value
-                        .expect("Failed to goto position.");
-                }
-            });
-        });
 
+            // ui.label("Current RA/Dec:");
+            // ui.end_row();
+
+            ui.add(egui::Label::new(format!("{}", self.curr_ra_dec.ra)));
+            ui.add(egui::Label::new(format!("{}", self.curr_ra_dec.dec)));
+            if ui.button("Refresh").clicked() {
+                self.curr_ra_dec = self
+                    .mount
+                    .as_mut()
+                    .unwrap()
+                    .get_position_ra_dec()
+                    .expect("Failed to get position.");
+            }
+            ui.end_row();
+
+            // ui.label("Go to RA/Dec:");
+            // ui.end_row();
+
+            ui.add(egui::DragValue::new(&mut self.goto_ra_dec.ra).speed(0.1));
+            ui.add(egui::DragValue::new(&mut self.goto_ra_dec.dec).speed(0.1));
+            if ui.button("Go").clicked() {
+                self.mount
+                    .as_mut()
+                    .unwrap()
+                    .goto_ra_dec(self.goto_ra_dec) // Pass the cloned value
+                    .expect("Failed to goto position.");
+            }
+            ui.end_row();
+        });
     }
 
     fn data_plot(&mut self, ui: &mut egui::Ui) {
@@ -190,7 +191,8 @@ mod tests {
     pub use crate::mount::CelestronMount;
     use crate::{
         mount::{Gps, Mount, RADec, Rtc, SlewAxis, SlewDir, TrackingMode}, // + SlewRate ?
-        AzEl, NonGpsDevice,
+        AzEl,
+        NonGpsDevice,
     };
     use chrono::Utc;
     use std::{thread::sleep, time::Duration};
