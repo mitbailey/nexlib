@@ -19,6 +19,7 @@ fn from_deg_to_i64(deg: f64) -> i64 {
     ((deg / 360.0) * REV as f64) as i64
 }
 
+#[derive(Debug, Copy, Clone)]
 pub struct RADec {
     pub ra: f64,
     pub dec: f64,

@@ -1,14 +1,195 @@
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")] // hide console window on Windows in release
+
+use std::vec;
+use eframe::egui;
+use eframe::egui::Visuals;
+use egui_dock::{DockArea, DockState, NodeIndex};
+use mount::Mount;
+
 pub mod mount;
 pub use mount::{AzEl, CelestronMount, NonGpsDevice, RADec};
 
 // TODO: Fix issue where the serial port always waits the 3.5 second timeout before returning the buffer, even when something has been read. Perhaps this has to do with the fact that the buffer hasn't been filled to capacity?
+
+// When compiling natively:
+#[cfg(not(target_arch = "wasm32"))]
+fn main() -> eframe::Result<()> {
+    env_logger::init(); // Log to stderr (if you run with `RUST_LOG=debug`).
+
+    let native_options = eframe::NativeOptions {
+        viewport: egui::ViewportBuilder::default()
+            .with_inner_size([800.0, 600.0])
+            .with_min_inner_size([300.0, 220.0]),
+        // .with_icon(
+        //     // NOTE: Adding an icon is optional
+        //     eframe::icon_data::from_png_bytes(&include_bytes!("../assets/icon-256.png")[..])
+        //         .expect("Failed to load icon"),
+        // ),
+        ..Default::default()
+    };
+
+    eframe::run_native(
+        "NexLib Test Program",
+        native_options,
+        Box::new(|cc| {
+            // This gives us image support:
+            egui_extras::install_image_loaders(&cc.egui_ctx);
+
+            Box::<Gui>::default()
+        }),
+    )
+}
+
+struct GuiTabs {
+    mount: Option<CelestronMount>,
+    connected: bool,
+
+    curr_ra_dec: RADec,
+    goto_ra_dec: RADec,
+}
+
+struct Gui {
+    tree: DockState<String>,
+    tabs: GuiTabs,
+}
+
+impl egui_dock::TabViewer for GuiTabs {
+    type Tab = String;
+
+    fn title(&mut self, tab: &mut Self::Tab) -> egui::WidgetText {
+        (&*tab).into()
+    }
+
+    fn ui(&mut self, ui: &mut egui::Ui, tab: &mut Self::Tab) {
+        // ui.set_enabled(!self.modal_active);
+
+        match tab.as_str() {
+            "Device Controls" => self.device_controls(ui),
+            "Data Plot" => self.data_plot(ui),
+            "Data Log" => self.data_log(ui),
+            _ => self.default_tab(ui),
+        }
+    }
+}
+
+impl GuiTabs {
+    fn device_controls(&mut self, ui: &mut egui::Ui) {
+        // Button
+        ui.horizontal(|ui| match self.mount {
+            Some(_) => {
+                self.connected = true;
+                ui.add_enabled(false, egui::Button::new("Connected"));
+            }
+            None => {
+                self.connected = false;
+                if ui.button("Connect").clicked() {
+                    ui.add(egui::Spinner::new().color(egui::Color32::WHITE));
+                    ui.label("Connecting...");
+
+                    self.mount = match CelestronMount::new() {
+                        Ok(m) => Some(m),
+                        Err(e) => {
+                            println!("Error: {:?}", e);
+                            None
+                        }
+                    };
+                }
+            }
+        });
+
+        egui::Grid::new("grid").show(ui, |ui| {
+            ui.set_enabled(self.connected);
+    
+            ui.label("Current RA/Dec:");
+            ui.horizontal(|ui| {
+                ui.add(egui::Label::new(format!("{}", self.curr_ra_dec.ra)));
+                ui.add(egui::Label::new(format!("{}", self.curr_ra_dec.dec)));
+                if ui.button("Refresh").clicked() {
+                    self.curr_ra_dec = self
+                        .mount
+                        .as_mut()
+                        .unwrap()
+                        .get_position_ra_dec()
+                        .expect("Failed to get position.");
+                }
+            });
+    
+            ui.label("Go to RA/Dec:");
+            ui.horizontal(|ui| {
+                ui.add(egui::DragValue::new(&mut self.goto_ra_dec.ra).speed(0.1));
+                ui.add(egui::DragValue::new(&mut self.goto_ra_dec.dec).speed(0.1));
+                if ui.button("Go").clicked() {
+                    self.mount
+                        .as_mut()
+                        .unwrap()
+                        .goto_ra_dec(self.goto_ra_dec) // Pass the cloned value
+                        .expect("Failed to goto position.");
+                }
+            });
+        });
+
+    }
+
+    fn data_plot(&mut self, ui: &mut egui::Ui) {
+        // Button
+        ui.horizontal(|ui| {
+            if ui.button("Generate Random Datapoint").clicked() {
+                print!("Button pushed.");
+            }
+        });
+    }
+
+    fn data_log(&mut self, ui: &mut egui::Ui) {
+        ui.label("This is the data log tab.");
+    }
+
+    fn default_tab(&mut self, ui: &mut egui::Ui) {
+        ui.label("This is a default tab.");
+    }
+}
+
+impl Default for Gui {
+    fn default() -> Self {
+        let mut tree = DockState::new(vec!["Device Controls".to_owned()]);
+
+        // You can modify the tree before constructing the dock
+        let [a, _b] = tree.main_surface_mut().split_right(
+            NodeIndex::root(),
+            0.5,
+            vec!["Data Plot".to_owned()],
+        );
+        let [_, _] = tree
+            .main_surface_mut()
+            .split_below(a, 0.8, vec!["Data Log".to_owned()]);
+
+        let tabs = GuiTabs {
+            mount: None,
+            connected: false,
+            curr_ra_dec: RADec::new(0.0, 0.0),
+            goto_ra_dec: RADec::new(0.0, 0.0),
+        };
+
+        Self { tree, tabs }
+    }
+}
+
+impl eframe::App for Gui {
+    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        ctx.set_pixels_per_point(1.5);
+        ctx.set_visuals(Visuals::dark());
+
+        DockArea::new(&mut self.tree)
+            // .style(Style::from_egui(ctx.style().as_ref()))
+            .show(ctx, &mut self.tabs);
+    }
+}
 
 /// Tests prefixed with `nocon` require exclusive communication access to a mount and cannot be run concurrently. These tests should only be run using `cargo test nocon -- --test-threads=1`. If all tests are to be run, then `cargo test -- --test-threads=1` should be used since some will require exclusive access to the same hardware device.
 #[cfg(test)]
 mod tests {
     pub use crate::mount::CelestronMount;
     use crate::{
-        mount::{Gps, Mount, RADec, Rtc, SlewAxis, SlewDir, SlewRate, TrackingMode},
+        mount::{Gps, Mount, RADec, Rtc, SlewAxis, SlewDir, TrackingMode}, // + SlewRate ?
         AzEl, NonGpsDevice,
     };
     use chrono::Utc;
@@ -101,8 +282,18 @@ mod tests {
             .get_position_ra_dec()
             .expect("Failed to get position.");
 
-        assert!((new_pos.ra - (pos.ra + DX)).abs() < ACC, "RA: {} -> {}", pos.ra, new_pos.ra);
-        assert!((new_pos.dec - (pos.dec + DX)).abs() < ACC, "Dec: {} -> {}", pos.dec, new_pos.dec);
+        assert!(
+            (new_pos.ra - (pos.ra + DX)).abs() < ACC,
+            "RA: {} -> {}",
+            pos.ra,
+            new_pos.ra
+        );
+        assert!(
+            (new_pos.dec - (pos.dec + DX)).abs() < ACC,
+            "Dec: {} -> {}",
+            pos.dec,
+            new_pos.dec
+        );
     }
 
     #[test]
@@ -174,7 +365,9 @@ mod tests {
             sleep(Duration::from_secs(1));
         }
 
-        mount.stop_slew(SlewAxis::RAAz).expect("Failed to stop slew.");
+        mount
+            .stop_slew(SlewAxis::RAAz)
+            .expect("Failed to stop slew.");
 
         let pos = mount
             .get_position_ra_dec()
@@ -211,7 +404,9 @@ mod tests {
             sleep(Duration::from_secs(1));
         }
 
-        mount.stop_slew(SlewAxis::RAAz).expect("Failed to stop slew.");
+        mount
+            .stop_slew(SlewAxis::RAAz)
+            .expect("Failed to stop slew.");
 
         let pos = mount
             .get_position_ra_dec()
@@ -249,9 +444,7 @@ mod tests {
     fn nocon_rtc_set_datetime_now() {
         let mut mount = CelestronMount::new().expect(ERR_MSG_1);
         let datetime = Utc::now();
-        mount
-            .set_datetime_now()
-            .expect("Failed to set datetime.");
+        mount.set_datetime_now().expect("Failed to set datetime.");
         sleep(Duration::from_secs(1));
         println!("Getting... ");
         let ndatetime = mount.get_datetime().expect("Failed to get datetime.");
